@@ -1,0 +1,403 @@
+
+```{r setup, warning=F, message=F,echo=F}
+library(tibble)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(lubridate)
+library(ggplot2)
+library(feasts)
+
+# tsibble: tidy temporal data frames and tools
+library(tsibble)
+
+# fable (forecast table)
+library(fable)
+
+# fabletools - provides tools for building modelling packages, with a focus on time series forecasting
+library(fabletools)
+
+# Feature Extraction and Statistics for Time Series in tsibble format
+#library(feasts)
+
+# tsibbledata: used datasets for example global_economy
+library(tsibbledata)
+library(forecast)
+library(MASS)
+
+library(cowplot)
+
+
+```
+
+## Question1
+
+```{r}
+df <- readr::read_csv("plastics.csv",show_col_types = FALSE)
+df = df%>%mutate(date = yearmonth(date))%>%
+  tsibble(index = date)
+df
+```
+
+```{r}
+df %>% autoplot(sale)
+df %>% gg_subseries(sale) +labs(y = "$thousand", title = "sale")
+```
+*We can observe a steady increase in sales, which indicate the presence of trend in the data also we can observe not much difference in variance.
+*With trend we can observe a seasonal behavior where every year around 6-8 month there is spike in sales and it has reduced by end of year.
+  Therefore, time series plot shows seasonal fluctuations as well as a trend-cycle in Product A sales.
+
+From the above sub- series plot, we can confirmly say there is a seasonality as every year in August we can see high sales of Product A.
+
+```{r}
+dcmp = df %>%model(classical_decomposition(sale, type='m'))
+components(dcmp) %>% autoplot()
+```
+
+```{r}
+df1 <- ts(df$sale, frequency = 12)
+decomp1 <- decompose(df1, type = 'multiplicative')
+trend <- decomp1$trend
+seasonal <- decomp1$seasonal
+rand <- decomp1$random
+```
+
+```{r}
+seasonally_adjusted_data = df$sale / seasonal
+plot(seasonally_adjusted_data)
+df %>% autoplot(sale, color='gray') + autolayer(components(dcmp), season_adjust, color='#0072B2') +labs(y="Sales of product A")
+```
+  
+```{r}
+df1 = df
+df1$sale[6] <- df1$sale[6] + 500
+dcmp <- df1 %>%model(classical_decomposition(sale, type='m'))
+seasonally_adjusted_data <- df1$sale / seasonal
+df1 %>% autoplot(sale, color='gray') + autolayer(components(dcmp), season_adjust, color='#0072B2') +labs(y="Sales of product A")
+
+```
+  
+tip: use autoplot to plot original and add outlier plot with autolayer
+
+An Effect of out-lier is causing cause skewed seasonally adjusted data, making it more difficult to determine the underlying trend and seasonal trends.Both trends and seasonal trend is been effected by the out-lier making hard to find the real pattern and lead to false prediction.
+But as the outlier is in initial year data, the prediction is not much effected. Still, outliers does effect in the time series.
+
+```{r}
+df1$sale[59] <- df1$sale[59] + 500
+dcmp1 <- df1 %>% model (classical_decomposition(sale, type='m'))
+df1 %>%autoplot(sale, color = "gray") +autolayer(components(dcmp), trend, color = 'purple')+
+autolayer(components(dcmp1), season_adjust, color ='blue')
+```
+
+The position of an outlier in a time series is important because it influences the estimated trend and seasonality components. Outliers have a more obvious influence on recent data when they are at the end, potentially distorting recent trends. Outliers in the middle, on the other hand, have a lesser influence, mostly impacting the surrounding time range. The structure of the data and the time of the outlier have a role as well, and dealing with outliers at the end can be more difficult.For seasonality the if outlier is at the end of the time series, it may have less effect on the estimation of the seasonal component than if it were in the middle. Seasonal components are frequently calculated based on data trends, and outliers can alter these patterns.
+
+
+```{r}
+train <- df %>% filter(year(date) < 1999)
+test <- df %>% filter(year(date) == 1999)
+```
+
+
+```{r}
+fit <- train %>%
+  model(
+    Mean = MEAN(sale),
+    Naive = NAIVE(sale),
+    Seasonal_Naive = SNAIVE(sale),
+    Drift = RW(sale ~ drift())
+  )
+fc <- fit %>% forecast(h = 12)
+accuracy(fc,df)
+fc %>% autoplot(df,level = NULL)
+fc %>% autoplot(df,level = NULL) + facet_wrap(~.model)
+```
+
+The Seasonal Naive Method looks to be the most effective. It has the lowest MAE, RMSE, and MAPE, implying that it gives the most accurate data projections. The Drift approach also performs well, but in terms of MAE and MAPE, the Seasonal Naive method exceeds it. The MAE and MAPE scores for the Mean and Naive techniques are greater, suggesting less accurate projections. Even the predicted plot to actual confirms the choice of Seasonal Naive is performing better.
+
+Among 4 models, The Seasonal Naive Method is the best choice for predicting for the above data-set.
+
+```{r}
+fit <- train %>%
+  model(
+    ANM = ETS(sale ~ error("A") + trend("N") + season("M"))
+  )
+
+fit <- fit %>% dplyr::select(ANM)
+fc <- fit %>% forecast(h = "1 years")
+
+fc %>% autoplot(df,level = NULL)
+accuracy(fc,df)
+gg_tsresiduals(fit)
+
+```
+I choose model ANM to be the best compare to MNN
+
+
+```{r}
+fit <- train %>%
+  model(
+    arima  = ARIMA(sale ~ pdq(1,0,0) + PDQ(0,1,1))
+  )
+accuracy(fit)
+report(fit[1])
+
+fc <- fit %>% forecast(h = "1 year")
+fc %>% autoplot(df,level = NULL)
+accuracy(fc,df)
+```
+
+The root mean square error (RMSE) is a common statistic used to evaluate forecasting models. Lower RMSE indicates better performance.
+Therefore, based on the RMSE criterion, the "Seasonal_Naive" model has the lowest RMSE among the listed models, with a value of 173.5283.
+
+According to the other parameters we have best models as below:
+ME (Mean Error): The ME for "ets_auto" is -84.37989.
+The model with the smallest ME is "ets_auto."
+
+MAE (Mean Absolute Error): The MAE for "arima" is 146.1166 .
+The model with the smallest MAE is "arima."
+
+MPE (Mean Percentage Error): The MPE for "arima" is1 114.41.
+The model with the smallest MPE is "arima."
+
+MAPE (Mean Absolute Percentage Error): The MAPE for "ets" is -7.33266
+The model with the smallest MAPE is "ets."
+
+MASE (Mean Absolute Scaled Error): The MASE for "arima" is 9.29
+The model with the smallest MASE is "arima."
+
+Given the many measures, no single model consistently outperforms the others in every criterion. 
+I would say, arima  model and ANN ets model is performing better for the above data in forecasting the sales of product A. If we have to chose one model "arima" appears to be a good option.
+
+```{r}
+df <- readr::read_csv("visitors.csv",show_col_types = FALSE)
+df = df%>%mutate(date = yearmonth(date))%>%
+  tsibble(index = date)
+```
+
+```{r}
+df %>% autoplot(visitors)
+df %>% gg_season(visitors)
+df %>%gg_subseries(visitors)
+gg_tsdisplay(df, visitors, plot_type='partial')
+```
+
+*Over the whole time period, from May 1985 to April 2005, the pattern is shown as a progressive increase in the number of visits. This long-term increasing trend is constant, indicating a growing tendency in visitors.
+*Seasonality behavior is also seen in the data as a recurring pattern of peaks and troughs at regular periods. which also confirmed by seasonality plot where, in December it has highest peak and even in july there is seasonal behavior found.
+Also, there might be an outlier present as 2003 we can see huge fall in visitors might be due to out-liers.
+*As same months exhibit relatively stable visitor numbers the variance in the data is stable.
+*Also, the lag in the data is 12 months as every year, the same seasonal pattern appears.
+* We can observe cyclic behavior as well as patterns or variations that reoccur over longer time periods than regular seasonality.
+
+
+```{r}
+train <- df %>% filter(year(date) < 2004)
+test <- df %>% filter(year(date) >= 2004 & year(date) <= 2005 )
+
+```
+
+# Holt-Winters’ multiplicative 
+
+```{r}
+fit <- train %>%model(multiplicative = ETS(visitors ~error("M") + trend("A") + season("M")))
+fc <- fit %>% forecast(h= 16)
+fc %>% autoplot(df, level = 90)
+
+```
+
+# WHY
+“multiplicative method is preferred when the seasonal variations are changing proportional to the level of the series.”
+Seasonal variation rises over time.We can see vary in magnitude(visitors) over time. If we see in year 1985 to 2005 the seasonal nature has been increasing. Its clearly seen that variance is not constant and its varying over time.
+
+# HOW IT WILL HELP?
+Using multiplicative seasonality ensures that the model captures the relationship correctly, making projections more relevant and accurate. Furthermore, it corresponds to the natural growth and patterns identified in the data, resulting in a more acceptable and interpretable model.
+
+  I.	an ETS model;
+```{r}
+fit <- train %>%
+  model(
+    ets = ETS((visitors))
+  )
+
+fit <- fit %>% dplyr::select(ets)
+fc <- fit %>% forecast(h = 16)
+accuracy(fc,df)
+fc %>% autoplot(df,level = 90)
+gg_tsresiduals(fit)
+```
+  II.	an additive ETS model applied to a Box-Cox transformed series;
+
+```{r}
+lam <- df %>% features(visitors, features = guerrero)
+transformed <- BoxCox(df$visitors, lam$lambda_guerrero)
+df$transformed = transformed
+df1 <- df[, -2]
+
+train <- df1 %>% filter(year(date) < 2004)
+test <- df1 %>% filter(year(date) >= 2004 & year(date) <= 2005 )
+
+fit <- train %>% model(additive = ETS(transformed ~ error("A") + trend("A") + season("A")))
+fc <- fit %>% forecast(h = 16)
+fc %>% autoplot(df1,level = 90)
+accuracy(fc,df)
+gg_tsresiduals(fit)
+```
+   III.	a seasonal naïve method;
+  
+```{r}
+
+train <- df %>% filter(year(date) < 2004)
+test <- df %>% filter(year(date) >= 2004 & year(date) <= 2005 )
+
+fit <- train %>%model(Seasonal_Naive = SNAIVE(visitors))
+
+fc <- fit %>% forecast(h = 24)
+fc %>% autoplot(df,level = NULL)
+accuracy(fc,df)
+gg_tsresiduals(fit)
+```
+
+
+ABOVE PLOTTED THE RESIDUAL PLOT
+ETS Additive Model:
+
+ME: -0.2730922
+RMSE: 0.3143414
+MAE: 0.275704
+MAPE: 1.761355
+MASE: 0.56687
+
+The Additive ETS Model has lower values for the above five parameters, indicating that it performs well in comparison to other models.
+However, when compared to the ETS model and the seasonal naive technique, the ETS model has lower values across all measures, indicating that it is somewhat more favorable based on the assessment criteria.
+
+Also, if I can check AIC value of ETS model 2411.094 and for additive ets model of transformed data it is -61.94
+Which clearly proves that model 2 - an additive ETS model applied to a Box-Cox transformed is performing well.
+
+```{r}
+df <- readr::read_csv("usmelec.csv",show_col_types = FALSE)
+df = df%>%mutate(index = yearmonth(index))%>%
+  tsibble(index = index)
+df
+```
+
+```{r}
+dcmp <- df %>%model(classical_decomposition(value, type='m'))
+trend <- dcmp$trend
+seasonal <- dcmp$seasonal
+rand <- dcmp$random
+df %>% autoplot(value)
+df %>% autoplot(value, color='gray') + autolayer(components(dcmp), trend, color='#0072B2') +labs(y="Sales of product A")
+
+```
+Analysing the 12-month moving average from a multiplicative decomposition entails comparing it to the original time series graphically to discover patterns, cycles, and outliers. Understanding underlying patterns is aided by assessing its efficacy in smoothing short-term variations and capturing longer-term trends. The research emphasises the importance of stationarity, seasonality representation, and forecasting utility. To assess accuracy, quantitative measurements such as MSE or RMSE might be utilised. The 12-month window size is subjective and may need testing.
+
+
+```{r}
+df %>% features(value, features = guerrero)
+```
+
+```{r}
+plot_grid(
+  autoplot(df,value),
+  autoplot(df,box_cox(value,-0.5738168)),
+  autoplot(df,log(value)),
+  ncol=3)
+
+```
+
+Given the seasonal nature of energy generation, the existence of peaks in the middle of the summer and middle of the winter shows seasonality that might benefit from transformation approaches. Logarithmic transformation, for example, can be useful in stabilising variance and dealing with right-skewed distributions found in energy consumption data.
+We need the transforming as the data as the mean, variance and autocorrelation structure is changing over time where the data is not stationary
+
+From plot, we can confirm box-cox and log bot the tranformation perform better at maintaing the variance and mean constant.
+
+Data is not stationary. As total net generation of electricity is dependent on the time. We can see  predictable patterns in the long-term. Time plots is also confirming that its changing over time. Also, the mean, variance and autocorrelation structure is changing over time.
+
+```{r}
+acf((df$value))
+acf(diff(df$value))
+Box.test(df$value, lag=10, type="Ljung-Box")
+```
+The ACF plot may also be used to identify non-stationary time series. The ACF of a stationary time series falls to zero relatively rapidly, but the ACF of non-stationary data declines slowly. We don't see any decline here. As a result, it confirms that the data is non-stationary.
+
+Test Statistic (X-squared): 3487.1
+Degrees of Freedom:10
+p-value:2.2e-16 
+
+All three results indicate that the auto-correlations are not zero.And there is a pattern in the time series data that cannot be explained. There is many autocorrelation lying just outside the 95% limits.
+
+# Finding the approriate differntiate value 
+```{r}
+ndiffs(df$value)
+```
+According to ndiffs(), the first differentiation should be sufficient to remove stationary.
+
+
+```{r}
+lam <- df %>% features(value, features = guerrero)
+transformed <- BoxCox(df$value, lam$lambda_guerrero)
+df$diff_transformed_boxcox = difference(transformed, 12)
+df$diff_log = difference(log(df$value), 12)
+
+gg_tsdisplay(df, difference(log(value), lag=12), plot_type='partial')
+gg_tsdisplay(df, difference(transformed, lag=12), plot_type='partial')
+```
+
+The ACF and PACF graphs of the differences data reveal the following patterns, indicating that the data may follow an ARIMA(p, d, 0) model.
+
+```{r}
+arima1 = Arima(df$diff_transformed_boxcox, order = c(6, 1, 0), seasonal = c(0, 
+    1, 1))
+arima2 = Arima(df$diff_transformed_boxcox, order = c(0, 1, 2), seasonal = c(3, 
+    1, 0))
+arima3 = Arima(df$diff_transformed_boxcox, order = c(2, 1, 0), seasonal = c(1, 
+    1, 0))
+arima1
+arima2
+arima3
+```
+# explanation
+Model 1 - AIC=-4857.68
+Model 2 - AIC=-4863.35 
+Model 3 - AIC=-4841.18
+
+
+Model 2, has lower AIC VALUE of AIC=-4863.35 compare to other 2 models tested.
+
+ARIMA(0,1,2) 
+
+```{r}
+residuals_df <- data.frame(index = df$index, residuals = residuals(arima2))
+checkresiduals(arima2)
+```
+We are not rejecting the null hypothesis since the p-value (0.372) is larger than the significance value of 0.05. This implies that the residuals show no indication of considerable autocorrelation. In other words, the ARIMA(0,1,2)(3,1,0)12 model residuals appear to be white noise.
+
+We do not have to try and fit better model as the residuals appers to be the white noise.
+
+```{r}
+fc = forecast(arima2, h = 180)
+plot( fc)
+```
+
+```{r}
+arima2 = Arima(df$value, order = c(0, 1, 2), seasonal = c(3, 
+    1, 0))
+```
+
+```{r}
+fc = forecast(arima2, h = 180)
+plot(fc)
+df1 = data.frame(fc=fc)
+```
+
+
+```{r}
+df2 <- readr::read_csv("ele.csv",show_col_types = FALSE)
+df2 %>% 
+  mutate(Month=yearmonth(Month)) %>% 
+  tsibble(index=Month) -> 
+  df
+df2 <- df2[, -2]
+
+```
+
+
+According to my comparison, these figures are still relevant after 6 years. The average absolute percentage error was just 2.17 percent and an RMSE of 9.71, which is only slightly lower than what we found in the best training model (RMSE = 7.23). Some model deterioration is to be expected, but these forecasts are obviously still relevant and might be much better with further retraining than what we observe 6 years out. This was accomplished by comparing actual EIA readings to expected levels between January 2017 and July 2019.
